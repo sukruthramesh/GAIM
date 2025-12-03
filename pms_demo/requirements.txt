@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+langchain>=0.0.300
+openai
+chromadb
+sentence-transformers
+numpy
+pandas
+scikit-learn
+cvxpy
+python-multipart
+python-dotenv
+pydantic
+tqdm
+requests
