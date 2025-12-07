@@ -1,6 +1,5 @@
-import numpy as np
-from ..utils import markowitz_optimize
-import pandas as pd
+import numpy as np # type: ignore
+from backend.utils import markowitz_optimize
 
 def optimise_portfolio(mu: np.ndarray, Sigma: np.ndarray, A: float, current_weights: np.ndarray = None,
                        lower_bounds=None, upper_bounds=None, turnover_penalty: float = 0.001):

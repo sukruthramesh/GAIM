@@ -1,19 +1,14 @@
-import pandas as pd
-import numpy as np
-from sklearn.covariance import LedoitWolf
+import pandas as pd # type: ignore
+import numpy as np # type: ignore
+from sklearn.covariance import LedoitWolf # type: ignore
 
 def estimate_mu_sigma_from_prices(prices_df: pd.DataFrame, freq: str = "monthly"):
-    """
-    prices_df: DataFrame with Date index and columns per asset ticker / asset class
-    returns: mu (annualized), Sigma (annualized)
-    """
     returns = prices_df.pct_change().dropna()
     if freq == "monthly":
         scale = 12
     else:
         scale = 252
     mu_hist = returns.mean() * scale
-    # covariance shrinkage
     lw = LedoitWolf()
     lw.fit(returns.values)
     Sigma_shrink = lw.covariance_ * scale

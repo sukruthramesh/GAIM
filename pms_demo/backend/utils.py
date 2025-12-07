@@ -1,8 +1,8 @@
 import math
-import numpy as np
-import pandas as pd
+import numpy as np # type: ignore
+import pandas as pd # type: ignore
 from typing import List, Optional, Tuple
-import cvxpy as cp
+import cvxpy as cp # type: ignore
 
 # ---------------------------
 # Risk scoring utilities
