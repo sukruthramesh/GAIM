@@ -1,6 +1,36 @@
-##### Generate the prompt that will go into scoring the responses
-def generate_scoring_prompt(user_prompt, candidate_response):
-    prompt ="""
+from pydantic import BaseModel
+from typing import List, Optional, Dict
+from ai_council.constants import MODELS
+
+
+##### Scoring Output Format
+class Scores(BaseModel):
+    accuracy : int
+    completeness : int
+    grounding : int
+    reasoning : int
+    clarity : int
+
+class scoring_output(BaseModel):
+    scores : Scores
+    confidence_estimate : float
+    justification : str
+
+
+##### Audit Output Format
+class flag(BaseModel):
+    scorer_id : str
+    issue : str
+    severity : str
+class Audit_Report(BaseModel):
+    audit_id : str
+    flags : List[flag]
+    drops : List[str]
+    explanation : str
+    normalization : Dict[str, float]
+
+
+scoring_template ="""
     SYSTEM: You are an impartial evaluator that scores candidate answers to a user prompt. Use the rubric provided and be objective. 
     Return only the JSON object described below and nothing else.
 
@@ -17,34 +47,44 @@ def generate_scoring_prompt(user_prompt, candidate_response):
     - reasoning: Are the logical steps coherent and correct? (1 = flawed reasoning; 5 = sound stepwise logic)
     - clarity: Is it readable, appropriately toned, and well-structured? (1 = confusing; 5 = clear & concise)
 
-    Also provide a one-sentence justification for the total score.
+    Also provide a one-sentence justification for the total score and a confidence estimate between 0 and 1.
 
-    Return JSON only with these fields:
-    {
-    "scores": {
-        "accuracy": int,
-        "completeness": int,
-        "grounding": int,
-        "reasoning": int,
-        "clarity": int
-    },
-    "confidence_estimate": float, # 0.0-1.0; your best estimate of how confident you are
-    "justification": "one-sentence justification"
-    }
+    Output Format : 
+    {output_format}
 
     Notes:
     - Score numerically and be conservative: penalize minor hallucinations or unsupported numeric claims.
-    - Do not refer to model names, internals, or policies in your justification.
+    - Do not refer to model names, internals, or policies in your justification.Constraints:
+    - Output must be strictly valid JSON (use "null" for missing, numbers must be numeric).
+    - Do not include trailing commas.
+    - Do not include comments or explanatory text.
+"""
 
-    """
-    prompt = prompt.replace('{user_prompt}',user_prompt)
-    prompt = prompt.replace('{candidate_response}', candidate_response)
-    return prompt
+expert_generation_template = """
+    SYSTEM:
+    You are a retrieval-grounded assistant. Use only the information in the CONTEXT. 
+    If the answer is not in the context, say: "Not in context." 
+    Do not guess or invent facts.
+
+    FORMAT:
+    1. Final answer (1-2 lines)
+    2. Brief reasoning (1-2 lines)
+    3. Snippets used (# or "none")
+
+    USER:
+    {user_prompt}
+
+    CONTEXT:
+    {context}
+
+    RULES:
+    - Base all statements strictly on the context.
+    - Cite snippet numbers when used.
+    - Keep responses short and precise.
+"""
 
 
-##### Generate the prompt that will go into auditing the entire process
-def generate_auditor_prompt(user_prompt, responses, scoring_matrix):
-    prompt = """
+auditor_prompt_template = """
     SYSTEM: You are an independent auditor whose job is to inspect a scoring matrix produced by peer models and detect bias, collusion, or anomalous scoring patterns. Return only the JSON described below.
 
     USER: We provide:
@@ -67,20 +107,5 @@ def generate_auditor_prompt(user_prompt, responses, scoring_matrix):
     - or drop scorer from aggregation for this prompt
 
     Return JSON **only**:
-    {
-    "audit_id": "auditor_run_<uuid>",
-    "flags": [
-        {"scorer_id":"expert_2", "issue":"consistent mutual upvoting with expert_3", "severity":"medium", "action":"apply_penalty"},
-        ...
-    ],
-    "normalization": {
-        "expert_1": 1.0,
-        "expert_2": 0.7,
-        "expert_3": 1.0
-    },
-    "drops": ["scorer_id_to_drop_if_any"],
-    "adjusted_scoring_matrix": { ... same shape as input but with adjusted 'total' values ... },
-    "explanation": "one-paragraph summary of why adjustments were made"
-    }"""
-
-    return prompt.replace("{user_prompt}",user_prompt).replace('{responses}', responses).replace('{scoring_matrix}',scoring_matrix)
+    {output_format}
+"""
