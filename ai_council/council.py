@@ -62,30 +62,101 @@ def pretty_print_json(json_data):
         print(f"Error: {e}")
 
 
-def generate_scores(responses, user_prompt, llm = None):
+# def generate_scores(responses, user_prompt, llm = None):
+#     scorer_parser = PydanticOutputParser(pydantic_object=scoring_output)
+#     scoring_prompt = ChatPromptTemplate.from_template(scoring_template)
+#     chains = [(scoring_prompt|k["llm"], k) for k in MODELS]
+#     scoring_matrix = {}
+#     for chain in chains:
+#         if chain[1]['id'] == "evaluator":
+#             continue
+#         if llm and chain[1]['name'] != llm:
+#             continue
+#         temp_dict = {}
+#         print(chain[1]['name'])
+#         for i in range(len(responses)):
+#             result = chain[0].invoke({"user_prompt" : user_prompt, "candidate_response" : responses[i], "output_format" : scorer_parser.get_format_instructions()})
+#             try:
+#                 scoring_results.append(result)
+#                 json_response = ast.literal_eval('{'+re.sub(r'//.*','',extract_first_curly_balanced(scoring_results[-1])).replace('null' , '0') + '}')
+#                 json_response['total'] = sum([WEIGHTS[k] * json_response['scores'][k] for k in WEIGHTS])
+#                 temp_dict[responses[i]["response_id"]] = json_response
+#                 print(f"Scoring complete for {responses[i]['response_id']} by {chain[1]['name']}")
+#             except Exception as e:
+#                 print(f"Could not parse {responses[i]['response_id']} by {chain[1]['name']} due to {e}")
+#         scoring_matrix[chain[1]['name']] = temp_dict
+#     return scoring_matrix
+
+
+
+import ast
+import re
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+
+def generate_scores(responses, user_prompt, llm=None, timeout_seconds=600, max_workers=4):
+    """
+    Score candidate responses using multiple LLM chains with a timeout on each invoke.
+    - timeout_seconds: how long to wait for chain.invoke before skipping that response.
+    - max_workers: threadpool size for wrapping blocking invoke() calls.
+    """
     scorer_parser = PydanticOutputParser(pydantic_object=scoring_output)
     scoring_prompt = ChatPromptTemplate.from_template(scoring_template)
-    chains = [(scoring_prompt|k["llm"], k) for k in MODELS]
+    chains = [(scoring_prompt | k["llm"], k) for k in MODELS]
+
     scoring_matrix = {}
-    for chain in chains:
-        if chain[1]['id'] == "evaluator":
-            continue
-        if llm and chain[1]['name'] != llm:
-            continue
-        temp_dict = {}
-        print(chain[1]['name'])
-        for i in range(len(responses)):
-            result = chain[0].invoke({"user_prompt" : user_prompt, "candidate_response" : responses[i], "output_format" : scorer_parser.get_format_instructions()})
-            print(f"Scoring complete for {responses[i]['response_id']} by {chain[1]['name']}")
-            try:
-                scoring_results.append(result)
-                json_response = ast.literal_eval('{'+re.sub(r'//.*','',extract_first_curly_balanced(scoring_results[-1])).replace('null' , '0') + '}')
-                json_response['total'] = sum([WEIGHTS[k] * json_response['scores'][k] for k in WEIGHTS])
-                temp_dict[responses[i]["response_id"]] = json_response
-            except Exception as e:
-                print(f"Could not parse {responses[i]['response_id']} by {chain[1]['name']} due to {e}")
-        scoring_matrix[chain[1]['name']] = temp_dict
+    scoring_results = []  # collected raw results (same as your previous usage)
+
+    # Reuse a threadpool to wrap blocking invoke() calls
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for chain in chains:
+            # skip evaluator and optionally filter by llm name
+            if chain[1]["id"] == "evaluator":
+                continue
+            if llm and chain[1]["name"] != llm:
+                continue
+
+            temp_dict = {}
+            print(chain[1]["name"])
+
+            for i in range(len(responses)):
+                payload = {
+                    "user_prompt": user_prompt,
+                    "candidate_response": responses[i],
+                    "output_format": scorer_parser.get_format_instructions()
+                }
+
+                # submit the blocking invoke() to the threadpool and wait with timeout
+                future = executor.submit(chain[0].invoke, payload)
+                try:
+                    result = future.result(timeout=timeout_seconds)
+                except FuturesTimeoutError:
+                    # timed out — continue the loop
+                    print(f"Timeout after {timeout_seconds}s for {responses[i]['response_id']} by {chain[1]['name']}")
+                    # Optionally: future.cancel()  # best-effort (may not have effect if already running)
+                    continue
+                except Exception as e:
+                    # other errors from invoke()
+                    print(f"Invoke error for {responses[i]['response_id']} by {chain[1]['name']}: {e}")
+                    continue
+
+                # Parsing and weighting (kept your original logic, with minor safety)
+                try:
+                    scoring_results.append(result)
+                    raw = extract_first_curly_balanced(scoring_results[-1])
+                    cleaned = re.sub(r'//.*', '', raw).replace('null', '0')
+                    json_response = ast.literal_eval("{" + cleaned + "}")
+                    json_response["total"] = sum(WEIGHTS[k] * json_response["scores"][k] for k in WEIGHTS)
+                    temp_dict[responses[i]["response_id"]] = json_response
+                    print(f"Scoring complete for {responses[i]['response_id']} by {chain[1]['name']}")
+                except Exception as e:
+                    print(f"Could not parse {responses[i]['response_id']} by {chain[1]['name']} due to {e}")
+
+            scoring_matrix[chain[1]["name"]] = temp_dict
+
     return scoring_matrix
+
+
+
 
 def generate_expert_response(user_prompt, context):
     prompt = ChatPromptTemplate.from_template(expert_generation_template)
@@ -112,5 +183,53 @@ def generate_audit_report(user_prompt, responses, scoring_matrix):
     audit_prompt = ChatPromptTemplate.from_template(auditor_prompt_template)
     auditor =[k for k in MODELS if k["id"] == "evaluator"]
     chain = audit_prompt|auditor[0]['llm']
+    print(audit_prompt)
     result = chain.invoke({"user_prompt" : user_prompt, "responses" : responses, "scoring_matrix" : scoring_matrix, "output_format": audit_report.get_format_instructions()})
-    return result
+    return result, audit_prompt
+
+def print_with_bold(text):
+    """
+    Prints text with **bold** markers converted to terminal bold.
+    Example: "This is **bold** text" -> This is bold text (in bold)
+    """
+    BOLD_START = "\033[1m"
+    BOLD_END = "\033[0m"
+    if not isinstance(text, str):
+        print("Error: Input must be a string.")
+        return
+
+    # Replace **...** with ANSI bold codes
+    formatted_text = re.sub(
+        r"\*\*(.*?)\*\*",  # Match text between ** and **
+        lambda m: f"{BOLD_START}{m.group(1)}{BOLD_END}",
+        text
+    )
+    print(formatted_text)
+
+def compute_average_totals(scoring_matrix):
+    totals = {}      # collects all totals per response_id
+    counts = {}      # counts how many values per response_id
+    for model_data in scoring_matrix.values():
+        for response_id, response_content in model_data.items():
+            total_value = response_content["total"]
+            if response_id not in totals:
+                totals[response_id] = 0
+                counts[response_id] = 0
+            totals[response_id] += total_value
+            counts[response_id] += 1
+    averages = {response_id: totals[response_id] / counts[response_id]
+                for response_id in totals}
+    return averages
+
+
+def audited_scoring_matrix(audit , scoring_matrix, responses):
+    response_ids = [k['response_id'] for k in responses]
+    audit_json = ast.literal_eval('{'+extract_first_curly_balanced(audit)+"}")
+    for model in audit_json['normalization']:
+        for j in scoring_matrix[model]:
+            scoring_matrix[model][j]['total'] *= audit_json['normalization'][model]
+    for drops in audit_json['drops']:
+        scoring_matrix.pop(drops)
+    averages_json = compute_average_totals(scoring_matrix)
+    best_response = responses[response_ids.index(max(averages_json))]
+    return scoring_matrix, averages_json, best_response
