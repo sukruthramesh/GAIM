@@ -183,8 +183,9 @@ def generate_audit_report(user_prompt, responses, scoring_matrix):
     audit_prompt = ChatPromptTemplate.from_template(auditor_prompt_template)
     auditor =[k for k in MODELS if k["id"] == "evaluator"]
     chain = audit_prompt|auditor[0]['llm']
-    print(audit_prompt)
+    # print(audit_prompt)
     result = chain.invoke({"user_prompt" : user_prompt, "responses" : responses, "scoring_matrix" : scoring_matrix, "output_format": audit_report.get_format_instructions()})
+    print(result)
     return result, audit_prompt
 
 def print_with_bold(text):
