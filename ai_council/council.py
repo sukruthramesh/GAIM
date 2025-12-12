@@ -104,7 +104,6 @@ def generate_scores(responses, user_prompt, llm=None, timeout_seconds=600, max_w
     chains = [(scoring_prompt | k["llm"], k) for k in MODELS]
 
     scoring_matrix = {}
-    scoring_results = []  # collected raw results (same as your previous usage)
 
     # Reuse a threadpool to wrap blocking invoke() calls
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -142,9 +141,12 @@ def generate_scores(responses, user_prompt, llm=None, timeout_seconds=600, max_w
                 # Parsing and weighting (kept your original logic, with minor safety)
                 try:
                     scoring_results.append(result)
-                    raw = extract_first_curly_balanced(scoring_results[-1])
-                    cleaned = re.sub(r'//.*', '', raw).replace('null', '0')
-                    json_response = ast.literal_eval("{" + cleaned + "}")
+                    if not IS_ONLINE:
+                        raw = extract_first_curly_balanced(scoring_results[-1])
+                        cleaned = re.sub(r'//.*', '', raw).replace('null', '0')
+                        json_response = ast.literal_eval("{" + cleaned + "}")
+                    else:
+                        json_response = ast.literal_eval(scoring_results[0].content)
                     json_response["total"] = sum(WEIGHTS[k] * json_response["scores"][k] for k in WEIGHTS)
                     temp_dict[responses[i]["response_id"]] = json_response
                     print(f"Scoring complete for {responses[i]['response_id']} by {chain[1]['name']}")
@@ -185,8 +187,9 @@ def generate_audit_report(user_prompt, responses, scoring_matrix):
     chain = audit_prompt|auditor[0]['llm']
     # print(audit_prompt)
     result = chain.invoke({"user_prompt" : user_prompt, "responses" : responses, "scoring_matrix" : scoring_matrix, "output_format": audit_report.get_format_instructions()})
-    print(result)
-    return result, audit_prompt
+    return_result = result if not IS_ONLINE else result.content
+    print(return_result)
+    return return_result, audit_prompt
 
 def print_with_bold(text):
     """
@@ -224,13 +227,18 @@ def compute_average_totals(scoring_matrix):
 
 
 def audited_scoring_matrix(audit , scoring_matrix, responses):
+    normalized_scoring_matrix = scoring_matrix
     response_ids = [k['response_id'] for k in responses]
     audit_json = ast.literal_eval('{'+extract_first_curly_balanced(audit)+"}")
     for model in audit_json['normalization']:
-        for j in scoring_matrix[model]:
-            scoring_matrix[model][j]['total'] *= audit_json['normalization'][model]
+        for j in normalized_scoring_matrix[model]:
+            normalized_scoring_matrix[model][j]['total'] *= audit_json['normalization'][model]
     for drops in audit_json['drops']:
-        scoring_matrix.pop(drops)
-    averages_json = compute_average_totals(scoring_matrix)
-    best_response = responses[response_ids.index(max(averages_json))]
-    return scoring_matrix, averages_json, best_response
+        normalized_scoring_matrix.pop(drops)
+    try:
+        averages_json = compute_average_totals(normalized_scoring_matrix)
+        best_response = responses[response_ids.index(max(averages_json))]
+    except:
+        # averages_json = compute_average_totals(scoring_matrix)
+        best_response = responses[0]
+    return normalized_scoring_matrix, averages_json, best_response

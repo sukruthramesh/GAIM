@@ -328,7 +328,7 @@ class AICouncilUI:
             # Display best response
             self.messages.append({
                 'type': 'assistant',
-                'text': best_response['text']
+                'text': best_response['text'] if not IS_ONLINE else best_response['text'].content
             })
             self.update_chat()
             

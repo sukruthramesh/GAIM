@@ -6,6 +6,7 @@ import pandas as pd
 from pypdf import PdfReader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from ai_council.constants import *
+from langchain_openai import OpenAIEmbeddings
 
 ###############################################################################
 # Name : check_files_folders
@@ -24,7 +25,7 @@ def check_files_folders():
 ###############################################################################
 def get_vector_db():
     if verify_file_vectorisation():
-        embeddings = OllamaEmbeddings(model="mxbai-embed-large")
+        embeddings = OllamaEmbeddings(model="mxbai-embed-large") if not IS_ONLINE else OpenAIEmbeddings(model="text-embedding-3-small")
         vs = FAISS.load_local(VECTOR_DB_FOLDER, embeddings=embeddings, allow_dangerous_deserialization=True)
         return vs
     else:
@@ -58,7 +59,7 @@ def create_vector_db():
     splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
     chunks = splitter.split_documents(docs)
     print(f"Created {len(chunks)} chunks")
-    embeddings = OllamaEmbeddings(model="mxbai-embed-large")
+    embeddings = OllamaEmbeddings(model="mxbai-embed-large") if not IS_ONLINE else OpenAIEmbeddings(model="text-embedding-3-small")
     vs = FAISS.from_texts(
         texts=[c.page_content for c in chunks],
         embedding=embeddings,
